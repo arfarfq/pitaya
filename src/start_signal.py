@@ -4,6 +4,8 @@ import time
 
 import numpy as np
 
+from .data_processor import DataProcessor
+
 HOST = "rp-xxxxxx.local"  # Replace with your Red Pitaya hostname or IP.
 ADC_RATE_HZ = 125_000_000  # Check your board model.
 DECIMATION = 64
@@ -11,7 +13,12 @@ CAPTURE_S = 0.100
 TRIGGER_LEVEL_V = 0.25
 
 
-def record_transient(host, csv_path):
+def record_transient(host, csv_path=None):
+    """Capture IN1 using the pulse on IN2 as trigger, then return its FFT.
+
+    Analysis starts as soon as the complete capture has been downloaded.
+    csv_path optionally archives the raw capture in seconds and volts.
+    """
     fs_hz = ADC_RATE_HZ / DECIMATION
     sample_count = math.ceil(CAPTURE_S * fs_hz)
     buffer_samples = 8 * math.ceil(sample_count / 8)
@@ -93,13 +100,28 @@ def record_transient(host, csv_path):
                 send("OUTPUT1:STATE OFF")
 
     time_s = np.arange(sample_count) / fs_hz
-    np.savetxt(
-        csv_path,
-        np.column_stack((time_s, voltage_v)),
-        delimiter=",",
-        header="time_s,voltage_v",
-        comments="",
-    )
-    print(f"Saved {sample_count:,} samples at {fs_hz:,.0f} Hz to {csv_path}")
+    processor = DataProcessor(time_s * 1e6, voltage_v * 1e3)
+    processor.dft()
+
+    if csv_path is not None:
+        np.savetxt(
+            csv_path,
+            np.column_stack((time_s, voltage_v)),
+            delimiter=",",
+            header="time_s,voltage_v",
+            comments="",
+        )
+        print(f"Saved {sample_count:,} samples at {fs_hz:,.0f} Hz to {csv_path}")
+    return processor
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Capture a transient and plot its FFT.")
+    parser.add_argument("host", help="Red Pitaya hostname or IP address")
+    parser.add_argument("--csv", help="Optional path to save the raw capture")
+    args = parser.parse_args()
+    record_transient(args.host, args.csv).plot()
 
 
