@@ -1,8 +1,6 @@
 from src.data_processor import DataProcessor
 from pathlib import Path
 
-
-
 FILE_PATH = "../data/k_20ms_avg128_26.5degC.csv"
 
 def main():
