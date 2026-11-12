@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.signal.windows import blackmanharris
 
+REF_HZ = 116e3
+REF_MZ = 23
+
 
 class DataProcessor:
     """Input units match the original notebook: x in microseconds, y in millivolts."""
@@ -22,6 +25,14 @@ class DataProcessor:
 
     @classmethod
     def load_data(cls, file_path):
+        # Native captures carry explicit SI units in their header. Older scope
+        # exports have no header and store seconds/volts in columns 4 and 5.
+        capture = pd.read_csv(file_path, nrows=0)
+        if list(capture.columns) == ["time_s", "voltage_v"]:
+            data = pd.read_csv(file_path)
+            x = pd.to_numeric(data["time_s"], errors="raise").to_numpy() * 1e6
+            y = pd.to_numeric(data["voltage_v"], errors="raise").to_numpy() * 1e3
+            return cls(x, y)
         data = pd.read_csv(file_path, header=None)
         x = pd.to_numeric(data.iloc[:, 3], errors="raise").to_numpy() * 1e6
         y = pd.to_numeric(data.iloc[:, 4], errors="raise").to_numpy() * 1e3
@@ -40,7 +51,7 @@ class DataProcessor:
             self.dft_mag = amplitude  # mV, rather than an unnormalized FFT sum
         return self.dft_freq, self.dft_mag
 
-    def frequency_to_mz(self, *, ref_hz, ref_mz, harmonic_order=1,
+    def frequency_to_mz(self, *, ref_hz=REF_HZ, ref_mz=REF_MZ, harmonic_order=1,
                         ref_harmonic_order=1, calibration_label="Unconfirmed reference"):
         """m/z = ref_mz * [(ref_hz / ref_order) / (f / order)]**2.
 
