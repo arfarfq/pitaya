@@ -1,0 +1,14 @@
+# Local project context and work log
+/agent.md
+
+# Python and notebook caches
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Generated analysis exports
+/outputs/
+
+# macOS metadata
+.DS_Store
