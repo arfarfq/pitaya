@@ -25,3 +25,26 @@ processor.plot()
 Call `processor.frequency_to_mz(...)` with a confirmed calibration if you also
 want the mass-to-charge spectrum. Saved captures can be reopened using
 `DataProcessor.load_data("data/capture.csv")`.
+
+FFT peak detection is configured in the repository's `config.yaml`:
+
+```yaml
+detect_peaks:
+  min_peak_distance_khz: 0.50
+  height_sigma: 5.0
+  prominence_sigma: 2.0
+```
+
+Increase `height_sigma` to reject weaker peaks, or `prominence_sigma` to reject
+maxima that stand out less from their surroundings. Both use the robust noise
+estimate (1.4826 × median absolute deviation) of the FFT magnitudes. Increase
+`min_peak_distance_khz` to keep only the taller of closely spaced peaks; this
+can also suppress real neighboring signals. The defaults match the FFT peak
+detection settings in `FFT_decay_analysis_Nov_2026.py`.
+
+Settings are loaded when a processor is created, so recreate it after editing
+the YAML file. The default config path is independent of the working directory.
+Use `DataProcessor.load_data("data/capture.csv", config_path="custom.yaml")`
+or `DataProcessor(x, y, config_path="custom.yaml")` to choose another config.
+Call `processor.detect_peaks()` to calculate peaks and `processor.plot()` to
+display them.

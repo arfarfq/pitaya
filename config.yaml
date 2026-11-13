@@ -1,0 +1,18 @@
+calibration:
+  m_ref_1: 38.9637065
+  f_ref_1_khz: 105.912
+  m_ref_2: 40.9618253
+  f_ref_2_khz: 103.311
+  use_calculated_offset: false
+  harmonic_order: 1
+  ref_harmonic_order: 1
+  calibration_label: Potassium calibration
+
+detect_peaks:
+  # Increase these values to make detection less sensitive.
+  # Keep only the taller of peaks closer than this separation (kHz).
+  min_peak_distance_khz: 0.50
+  # Minimum height = noise median + height_sigma * robust noise sigma.
+  height_sigma: 5.0
+  # Minimum prominence above a peak's surrounding baseline, in noise sigmas.
+  prominence_sigma: 10.0
