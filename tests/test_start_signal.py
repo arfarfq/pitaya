@@ -29,6 +29,25 @@ class FakeSocket:
 
 
 class CaptureTests(unittest.TestCase):
+    def test_configured_acquisition_and_fft_options(self):
+        sock = FakeSocket("16777216\n4096\nWAIT\n1\n0\n{0,1,0,-1,0,1,0,-1}\n"
+                          "{0,1,0,-1,0,1,0,-1}\n")
+        with (patch.object(start_signal.socket, "create_connection", return_value=sock) as connect,
+              patch.object(start_signal.time, "sleep")):
+            processor = start_signal.record_transient("configured-board", acquisition={
+                "port": 5001, "adc_rate_hz": 64000000, "decimation": 64,
+                "capture_s": 16e-6, "trigger_level_v": 0.4, "block_samples": 8,
+                "pulse_samples": 16, "pulse_low_samples": 4, "pulse_high_samples": 8,
+                "pulse_frequency_hz": 100000, "pulse_amplitude_v": 0.5,
+            }, processor_options={"padding_factor": 4, "window": "boxcar"})
+        connect.assert_called_once_with(("configured-board", 5001), timeout=5)
+        self.assertIn("ACQ:TRIG:LEV 0.4", sock.commands)
+        self.assertIn("SOUR1:FREQ:FIX 100000", sock.commands)
+        self.assertIn("SOUR1:VOLT 0.5", sock.commands)
+        self.assertIn("ACQ:AXI:SOUR1:DATA:START:N? 8,8", sock.commands)
+        self.assertEqual(processor.padding_factor, 4)
+        self.assertEqual(len(processor.dft()[0]), 33)
+
     def capture(self, sock, csv_path=None):
         with (
             patch.object(start_signal.socket, "create_connection", return_value=sock),
@@ -38,7 +57,7 @@ class CaptureTests(unittest.TestCase):
         ):
             return start_signal.record_transient("test-board", csv_path)
 
-    def test_capture_returns_fft_with_correct_units_and_csv_roundtrip(self):
+    def test_capture_returns_raw_processor_with_correct_units_and_csv_roundtrip(self):
         volts = 0.2 * np.sin(2 * np.pi * np.arange(16) / 8)
         data = "{" + ",".join(map(str, volts)) + "}"
         sock = FakeSocket(f"16777216\n4096\nWAIT\n1\n12\n{data}\n")
@@ -46,12 +65,15 @@ class CaptureTests(unittest.TestCase):
             path = Path(directory) / "capture.csv"
             processor = self.capture(sock, path)
             reloaded = DataProcessor.load_data(path)
-        np.testing.assert_allclose(processor.x, np.arange(16))
-        np.testing.assert_allclose(processor.y, volts * 1000)
+        np.testing.assert_allclose(processor.x, np.arange(16) * 1e-6)
+        np.testing.assert_allclose(processor.y, volts)
         np.testing.assert_allclose(reloaded.x, processor.x)
         np.testing.assert_allclose(reloaded.y, processor.y, atol=1e-12)
         self.assertAlmostEqual(processor.dt_seconds, 1e-6)
-        self.assertEqual(processor.dft_freq[np.argmax(processor.dft_mag)], 125_000)
+        self.assertIsNone(processor.dft_freq)
+        self.assertIsNone(processor.dft_mag)
+        processor.dft()
+        self.assertEqual(processor.dft_freq[np.argmax(processor.dft_mag)], 125)
         self.assertIn("ACQ:AXI:SOUR1:DATA:START:N? 12,16", sock.commands)
         self.assertEqual(sock.commands[-3:], [
             "ACQ:STOP", "ACQ:AXI:SOUR1:ENable OFF", "OUTPUT1:STATE OFF",
@@ -77,8 +99,8 @@ class CaptureTests(unittest.TestCase):
             path = Path(directory) / "scope.csv"
             path.write_text("0,0,0,0,0.1\n0,0,0,0.000001,0.2\n")
             processor = DataProcessor.load_data(path)
-        np.testing.assert_allclose(processor.x, [0, 1])
-        np.testing.assert_allclose(processor.y, [100, 200])
+        np.testing.assert_allclose(processor.x, [0, 1e-6])
+        np.testing.assert_allclose(processor.y, [0.1, 0.2])
 
 
 if __name__ == "__main__":
