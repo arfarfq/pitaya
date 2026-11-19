@@ -119,8 +119,6 @@ def compute_fft(signal, dt, cutoff_khz=500, padding_factor=8):
     """
     N = len(signal)
 
-    if N < 2:
-        raise ValueError("Not enough samples to calculate FFT.")
 
     Tobs = N * dt
     df = 1.0 / Tobs
@@ -526,38 +524,22 @@ with open(fullpath, "r", encoding="utf-8-sig") as file:
         time = parts[3]
         voltage_value = parts[4]
 
-        try:
-            time_value = float(time)
-            voltage_value = float(voltage_value)
-
-        except ValueError:
-            continue
+        time_value = float(time)
+        voltage_value = float(voltage_value)
 
         time_values.append(time_value)
         voltage_values.append(voltage_value)
 
 
 # ============================================================
-# CONVERT TO NUMPY ARRAYS AND VALIDATE DATA
+# CONVERT TO NUMPY ARRAYS
 # ============================================================
 
 time_s = np.array(time_values, dtype=float)
 voltage = np.array(voltage_values, dtype=float)
 
-if len(time_s) == 0:
-    raise ValueError(
-        f"No numerical waveform data found in:\n{fullpath}"
-    )
 
-if len(time_s) != len(voltage):
-    raise ValueError(
-        "Time and voltage arrays have different lengths."
-    )
 
-if len(time_s) < 2:
-    raise ValueError(
-        "Not enough data points for FFT."
-    )
 
 
 # ============================================================
@@ -566,8 +548,6 @@ if len(time_s) < 2:
 
 dt_array = np.diff(time_s)
 
-if np.any(dt_array <= 0):
-    raise ValueError("Time values must be strictly increasing.")
 
 # Original time-axis diagnostics
 dt_mean = np.mean(dt_array)
@@ -632,10 +612,6 @@ min_distance = max(
 # Minimum peak prominence
 signal_maximum = np.max(np.abs(voltage_ac))
 
-if signal_maximum <= 0:
-    raise ValueError(
-        "The waveform has no measurable amplitude."
-    )
 
 min_prominence = (
     PROMINENCE_FRACTION * signal_maximum
@@ -661,12 +637,6 @@ fit_mask = (
 t_fit = t_peaks[fit_mask]
 envelope_fit = upper_envelope[fit_mask]
 
-if len(t_fit) < 3:
-    raise ValueError(
-        "Fewer than three envelope maxima were found in the "
-        "fitting interval. Check EXPECTED_FREQUENCY_HZ, "
-        "PROMINENCE_FRACTION, FIT_START and FIT_END."
-    )
 
 # Natural logarithm of the upper envelope
 ln_envelope = np.log(envelope_fit)
@@ -680,11 +650,6 @@ slope = fit.slope
 intercept = fit.intercept
 r_squared = fit.rvalue**2
 
-if slope >= 0:
-    raise ValueError(
-        "The fitted envelope does not decay: the regression "
-        "slope is zero or positive. Check the fitting interval."
-    )
 
 # Decay time constant
 tau = -1.0 / slope
