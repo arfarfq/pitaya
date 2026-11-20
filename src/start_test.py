@@ -1,26 +1,51 @@
-import argparse
+import math
 import socket
 import time
 
-HOST = "rp-xxxxxx.local"  # Replace with your Red Pitaya hostname or IP.
+import numpy as np
+
+HOST = "rp-f0f7aa.local"
 PORT = 5000
 
-PULSE_HIGH_S = 3.0
+FUNDAMENTAL_HZ = 105_000
+WAVEFORM_SAMPLES = 16_384
+DURATION_S = 0.010
+DECAY_TIME_S = 0.003  # Configurable: the protocol does not prescribe tau.
 AMPLITUDE_V = 0.8
-OFFSET_V = 0.0
-
-# The waveform is high for half its period.
-WAVEFORM_PERIOD_S = 2 * PULSE_HIGH_S
-WAVEFORM_FREQUENCY_HZ = 1 / WAVEFORM_PERIOD_S
+PHASE_RAD = 0.0
 
 
-def send_pulse(host, port=PORT):
-    """Send one 3-second high pulse from Red Pitaya OUT1."""
-    waveform = ",".join(
-        ["0"] * 4096
-        + ["1"] * 8192
-        + ["0"] * 4096
+def generate_triangle(duration_s=DURATION_S, tau_s=DECAY_TIME_S, phase_rad=0.0):
+    """Return (time_s, normalized samples) for the protocol's noiseless transient.
+
+    Samples are at k*T/Ng, excluding T. The fixed unit scaling preserves the
+    exponential envelope; A0 is applied separately through the DAC amplitude.
+    """
+    if not math.isfinite(duration_s) or not 0.001 <= duration_s <= 0.010:
+        raise ValueError("duration_s must be between 0.001 and 0.010 seconds")
+    if not math.isfinite(tau_s) or tau_s <= 0:
+        raise ValueError("tau_s must be finite and positive")
+    if not math.isfinite(phase_rad):
+        raise ValueError("phase_rad must be finite")
+
+    time_s = np.arange(WAVEFORM_SAMPLES) * (duration_s / WAVEFORM_SAMPLES)
+    triangle = (2 / np.pi) * np.arcsin(
+        np.sin(2 * np.pi * FUNDAMENTAL_HZ * time_s + phase_rad)
     )
+    return time_s, np.exp(-time_s / tau_s) * triangle
+
+
+def send_triangle(host, port=PORT, *, duration_s=DURATION_S,
+                  tau_s=DECAY_TIME_S, amplitude_v=AMPLITUDE_V, phase_rad=0.0):
+    """Send one exponentially decaying 105 kHz triangular transient on OUT1.
+
+    amplitude_v is A0 in volts (peak, not peak-to-peak), with zero DC offset.
+    The complete transient occupies one arbitrary-waveform buffer period.
+    """
+    _, samples = generate_triangle(duration_s, tau_s, phase_rad)
+    if not math.isfinite(amplitude_v) or not 0 < amplitude_v <= 1:
+        raise ValueError("amplitude_v must be greater than 0 and at most 1 V")
+    waveform = ",".join(f"{sample:.9g}" for sample in samples)
 
     with socket.create_connection((host, port), timeout=5) as sock:
         def send(command):
@@ -31,9 +56,11 @@ def send_pulse(host, port=PORT):
 
             send("SOUR1:FUNC ARBITRARY")
             send(f"SOUR1:TRAC:DATA:DATA {waveform}")
-            send(f"SOUR1:FREQ:FIX {WAVEFORM_FREQUENCY_HZ:.12f}")
-            send(f"SOUR1:VOLT {AMPLITUDE_V:g}")
-            send(f"SOUR1:VOLT:OFFS {OFFSET_V:g}")
+            # The buffer contains all f0*T oscillations; it plays at 1/T Hz.
+            send(f"SOUR1:FREQ:FIX {1 / duration_s:.12f}")
+            send(f"SOUR1:VOLT {amplitude_v:g}")
+            send("SOUR1:VOLT:OFFS 0")
+            send("SOUR1:PHAS 0")
 
             # Generate exactly one waveform cycle.
             send("SOUR1:BURS:STAT BURST")
@@ -47,38 +74,23 @@ def send_pulse(host, port=PORT):
             send("SOUR1:TRig:INT")
 
             print(
-                f"Sending pulse on OUT1: "
-                f"{PULSE_HIGH_S:g} seconds high."
+                f"Sending triangular transient on OUT1: {FUNDAMENTAL_HZ:g} Hz, "
+                f"T={duration_s * 1000:g} ms, tau={tau_s * 1000:g} ms, "
+                f"A0={amplitude_v:g} V."
             )
 
             # Keep the output enabled until the entire waveform finishes.
-            time.sleep(WAVEFORM_PERIOD_S + 0.1)
+            time.sleep(duration_s + 0.1)
 
         finally:
             send("OUTPUT1:STATE OFF")
 
-    print("Pulse complete. OUT1 is off.")
+    print("Transient complete. OUT1 is off.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Send one 3-second pulse from Red Pitaya OUT1."
-    )
-    parser.add_argument(
-        "host",
-        nargs="?",
-        default=HOST,
-        help="Red Pitaya hostname or IP address",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=PORT,
-        help="SCPI port (default: 5000)",
-    )
-    args = parser.parse_args()
-
     try:
-        send_pulse(args.host, args.port)
+        send_triangle(HOST, PORT, duration_s=DURATION_S, tau_s=DECAY_TIME_S,
+                      amplitude_v=AMPLITUDE_V, phase_rad=PHASE_RAD)
     except KeyboardInterrupt:
         print("\nInterrupted.")

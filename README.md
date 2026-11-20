@@ -1,5 +1,20 @@
 # Pitaya / Racetrap signal processing
 
+Generate the protocol's noiseless, exponentially decaying 105 kHz triangular
+transient on OUT1:
+
+```sh
+uv run python -m src.start_test
+```
+
+The SCPI server must be running on `rp-f0f7aa.local`. Adjust `HOST`, `PORT`,
+`DURATION_S`, `DECAY_TIME_S`, `AMPLITUDE_V`, and `PHASE_RAD` at the top of
+`src/start_test.py`. Duration supports 1 to 10 ms and the decay time must be
+positive. The defaults use zero initial phase, a 10 ms duration, a chosen 3 ms
+decay time, and 0.8 V initial peak amplitude with zero offset. The 16,384-sample
+buffer plays once at `1 / duration`, then OUT1 is disabled. This step implements
+signal generation only.
+
 Capture IN1, triggered by a rising pulse on IN2, and immediately calculate and
 plot the FFT after download (run from the repository root):
 
