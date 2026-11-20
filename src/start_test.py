@@ -14,6 +14,10 @@ DECAY_TIME_S = 0.003  # Configurable: the protocol does not prescribe tau.
 AMPLITUDE_V = 0.8
 PHASE_RAD = 0.0
 
+def square_wave():
+    time_s = np.arange(WAVEFORM_SAMPLES) * (DURATION_S / WAVEFORM_SAMPLES)
+    square = np.where(time_s < 0.008, 1.0, 0.0)
+    return time_s, square
 
 def generate_triangle(duration_s=DURATION_S, tau_s=DECAY_TIME_S, phase_rad=0.0):
     """Return (time_s, normalized samples) for the protocol's noiseless transient.
@@ -42,10 +46,14 @@ def send_triangle(host, port=PORT, *, duration_s=DURATION_S,
     amplitude_v is A0 in volts (peak, not peak-to-peak), with zero DC offset.
     The complete transient occupies one arbitrary-waveform buffer period.
     """
-    _, samples = generate_triangle(duration_s, tau_s, phase_rad)
+    #_, samples = generate_triangle(duration_s, tau_s, phase_rad)
+
+    _, samples = square_wave()
     if not math.isfinite(amplitude_v) or not 0 < amplitude_v <= 1:
         raise ValueError("amplitude_v must be greater than 0 and at most 1 V")
     waveform = ",".join(f"{sample:.9g}" for sample in samples)
+
+    
 
     with socket.create_connection((host, port), timeout=5) as sock:
         def send(command):
