@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import trapezoid
 from scipy.signal import detrend as detrend_signal, find_peaks, peak_widths
 from scipy.signal.windows import get_window
+from scipy.stats import linregress
 
 from .config import DEFAULTS
 
@@ -18,18 +19,24 @@ class DataProcessor:
     mean interval for FFT without resampling voltage.
     Keep raw voltage via ``y`` and DC-corrected voltage via ``y_ac``.
     sampling_rtol is accepted for compatibility and is unused.
+
+    Create one instance per capture. Stored FFT results belong only to that
+    instance and are reused by detection and calibration, not across inputs.
     """
 
     def __init__(self, x, y, *, padding_factor=DEFAULTS["fft"]["padding_factor"],
                  cutoff_khz=DEFAULTS["fft"]["cutoff_khz"], sampling_rtol=0.01,
                  window="blackmanharris", window_parameter=None, window_symmetric=True,
                  detrend="constant", fft_length=None):
+
         self.x = np.array(x, dtype=float, copy=True)
         self.y = np.array(y, dtype=float, copy=True)
 
         intervals = np.diff(self.x)
+
         self._dt_seconds = float(intervals.mean())
         self.y_ac = self.y - self.y.mean()
+
         self._padding_factor = int(padding_factor)
         self._cutoff_khz = cutoff_khz
         self._fft_length = fft_length
@@ -46,11 +53,13 @@ class DataProcessor:
         self.x.setflags(write=False)
         self.y.setflags(write=False)
         self.y_ac.setflags(write=False)
+        # None marks stages without results; every new processor starts fresh.
         self.dft_freq = self.dft_mag = self.estimated_mz = None
         self.mz_mask = None
         self.calibration = None
         self.peaks = self.harmonic_families = None
         self.peak_mask = self.cleaned_mag = self.mz_axis = None
+        self.decay_fit = None
 
     @property
     def dt_seconds(self):
@@ -96,7 +105,11 @@ class DataProcessor:
         Padding refines bin spacing; it does not improve physical resolution.
         Set cutoff_khz=None at construction to retain the full frequency range.
         Configure window, detrending, and an optional explicit fft_length there.
+
+        The first call computes the FFT; later calls return the stored arrays.
+        Use a new processor for a different capture or different FFT settings.
         """
+        # Several stages call dft(), but only this branch calculates a transform.
         if self.dft_freq is None:
             n = self.y.size
             window = self._window
@@ -115,6 +128,55 @@ class DataProcessor:
             self.dft_freq = frequencies[keep]
             self.dft_mag = amplitude[keep]
         return self.dft_freq, self.dft_mag
+
+    def fit_decay(self, *, expected_frequency_hz=DEFAULTS["decay"]["expected_frequency_hz"],
+                  fit_start_s=None, fit_end_s=None,
+                  prominence_fraction=DEFAULTS["decay"]["prominence_fraction"]):
+        """Fit an exponential upper envelope to positive DC-corrected maxima.
+
+        Bounds are inclusive capture timestamps in seconds; None uses all data.
+        Regress log amplitude against time relative to the first selected peak:
+        A(t) = amplitude_v * exp(-(t - reference_time_s) / tau_s).
+        r_squared measures the log-space fit. Return/store None if fewer than
+        three peaks are available or the fit is nonfinite or does not decay.
+        This uses unwindowed y_ac independently of FFT detrending settings.
+        """
+        # Replace the previous fit, clearing it even if this attempt fails.
+        self.decay_fit = None
+        distance = max(1, int(0.7 / (expected_frequency_hz * self.dt_seconds)))
+        indices, _ = find_peaks(
+            self.y_ac, distance=distance,
+            prominence=prominence_fraction * np.max(np.abs(self.y_ac)))
+        # Logarithms require positive amplitudes; bounds use capture timestamps.
+        keep = self.y_ac[indices] > 0
+        if fit_start_s is not None:
+            keep &= self.x[indices] >= fit_start_s
+        if fit_end_s is not None:
+            keep &= self.x[indices] <= fit_end_s
+        indices = indices[keep]
+        if indices.size < 3:
+            return None
+
+        peak_times = self.x[indices]
+        peak_amplitudes = self.y_ac[indices]
+        # Referencing the first peak improves numerical stability and makes the
+        # intercept the log amplitude at that time. Exponential tau = -1/slope.
+        reference_time = float(peak_times[0])
+        fit = linregress(peak_times - reference_time, np.log(peak_amplitudes))
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            amplitude = float(np.exp(fit.intercept))
+            tau = float(np.divide(-1.0, fit.slope))
+        r_squared = float(fit.rvalue ** 2)
+        if (fit.slope >= 0 or amplitude <= 0
+                or not np.isfinite([fit.slope, fit.intercept, amplitude, tau, r_squared]).all()):
+            return None
+        self.decay_fit = {
+            "peak_times_s": peak_times, "peak_amplitudes_v": peak_amplitudes,
+            "reference_time_s": reference_time, "amplitude_v": amplitude,
+            "slope": float(fit.slope), "intercept": float(fit.intercept),
+            "tau_s": tau, "r_squared": r_squared,
+        }
+        return self.decay_fit
 
     def detect_peaks(self, *, min_distance_khz=0.50, prominence_sigma=2, height_sigma=5,
                      width_rel_height=0.5, integration_width_factor=2):
@@ -248,7 +310,7 @@ class DataProcessor:
         return self.estimated_mz
 
     def plot(self, *, mz_limits=(1, 200), frequency_limits_khz=None, clean_mz=True,
-             show=True, show_harmonics=True):
+             show=True, show_harmonics=True, show_envelope=False):
         """One plot() interface: time only, time+FFT, or time+FFT+m/z by state.
 
         mz_limits is a display zoom, not a data filter. Set it to None for all
@@ -256,6 +318,7 @@ class DataProcessor:
         By default, m/z uses cleaned amplitudes; clean_mz=False shows the raw FFT.
         Set show=False to return the figure without opening a display.
         Red markers identify candidate fundamentals; orange markers show harmonics.
+        show_envelope overlays an existing decay fit without computing one.
         """
         has_fft = self.dft_freq is not None and self.dft_mag is not None
         has_mz = self.estimated_mz is not None
@@ -271,6 +334,18 @@ class DataProcessor:
         signal_title = {"constant": "DC-Corrected Signal", "linear": "Detrended Signal",
                         "none": "Raw Signal"}[self._detrend]
         axes[0].set(title=signal_title, xlabel="Time (s)", ylabel="Voltage (V)")
+        if show_envelope and self.decay_fit is not None:
+            fit = self.decay_fit
+            times = self.x[(self.x >= fit["peak_times_s"][0])
+                           & (self.x <= fit["peak_times_s"][-1])]
+            envelope = fit["amplitude_v"] * np.exp(
+                -(times - fit["reference_time_s"]) / fit["tau_s"])
+            # Express the DC-corrected fit in the displayed waveform's baseline.
+            baseline = np.interp(times, self.x, self.y_analysis - self.y_ac)
+            axes[0].plot(times, envelope + baseline, "r--", linewidth=1.5,
+                         label=f"Envelope: τ = {fit['tau_s'] * 1000:.2f} ms, "
+                               f"R² = {fit['r_squared']:.3f}")
+            axes[0].legend()
         if has_fft:
             axes[1].plot(self.dft_freq, self.dft_mag, linewidth=0.7)
             axes[1].scatter([peak["freq_khz"] for peak in self.peaks],

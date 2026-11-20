@@ -19,6 +19,75 @@ from src.data_processor import DataProcessor
 
 
 class DataProcessorTests(unittest.TestCase):
+    def decay_signal(self, *, noise=0, detrend="constant"):
+        elapsed = np.arange(20000) / 1e6
+        voltage = 4 + 2 * np.exp(-elapsed / 0.006) * np.cos(2 * np.pi * 100000 * elapsed)
+        voltage += np.random.default_rng(42).normal(0, noise, elapsed.size)
+        return DataProcessor(elapsed + 0.1, voltage, detrend=detrend)
+
+    def test_decay_recovers_exponential_and_preserves_fft(self):
+        processor = self.decay_signal()
+        original = processor.y.copy()
+        _, spectrum = processor.dft()
+        spectrum_before = spectrum.copy()
+        fit = processor.fit_decay()
+        self.assertIs(fit, processor.decay_fit)
+        self.assertAlmostEqual(fit["tau_s"], 0.006, delta=0.00002)
+        expected = 2 * np.exp(-(fit["reference_time_s"] - 0.1) / 0.006)
+        self.assertAlmostEqual(fit["amplitude_v"], expected, delta=0.002)
+        self.assertGreater(fit["r_squared"], 0.999)
+        np.testing.assert_array_equal(processor.y, original)
+        np.testing.assert_array_equal(processor.dft()[1], spectrum_before)
+
+    def test_noisy_decay_interval_and_replacement(self):
+        processor = self.decay_signal(noise=0.005)
+        first = processor.fit_decay()
+        fit = processor.fit_decay(fit_start_s=0.102, fit_end_s=0.112)
+        self.assertIsNot(first, fit)
+        self.assertTrue(np.all(fit["peak_times_s"] >= 0.102))
+        self.assertTrue(np.all(fit["peak_times_s"] <= 0.112))
+        self.assertAlmostEqual(fit["tau_s"], 0.006, delta=0.0002)
+        self.assertIsNone(processor.fit_decay(fit_start_s=1))
+        self.assertIsNone(processor.decay_fit)
+
+    def test_decay_unavailable_for_flat_growing_or_too_few_peaks(self):
+        elapsed = np.arange(10000) / 1e6
+        for voltage in (np.zeros(elapsed.size),
+                        np.exp(elapsed / 0.006) * np.cos(2 * np.pi * 100000 * elapsed)):
+            with self.subTest(growing=bool(voltage.any())):
+                self.assertIsNone(DataProcessor(elapsed, voltage).fit_decay())
+        self.assertIsNone(self.decay_signal().fit_decay(fit_end_s=0.100025))
+        with patch("src.data_processor.linregress") as regression:
+            regression.return_value.slope = np.nan
+            regression.return_value.intercept = 0.0
+            regression.return_value.rvalue = np.nan
+            self.assertIsNone(self.decay_signal().fit_decay())
+
+    def test_decay_overlay_is_optional_and_uses_display_baseline(self):
+        for detrend in ("constant", "none", "linear"):
+            processor = self.decay_signal(detrend=detrend)
+            # Requesting an overlay alone must not trigger fitting.
+            figure, axes = processor.plot(show=False, show_envelope=True)
+            self.assertEqual(len(axes[0].lines), 1)
+            self.assertIsNone(processor.decay_fit)
+            plt.close(figure)
+            fit = processor.fit_decay()
+            figure, axes = processor.plot(show=False)
+            self.assertEqual(len(axes[0].lines), 1)
+            plt.close(figure)
+            figure, axes = processor.plot(show=False, show_envelope=True)
+            self.assertEqual(len(axes), 1)
+            self.assertEqual(len(axes[0].lines), 2)
+            line = axes[0].lines[1]
+            times = line.get_xdata()
+            baseline = np.interp(times, processor.x, processor.y_analysis - processor.y_ac)
+            np.testing.assert_allclose(line.get_ydata() - baseline,
+                                       fit["amplitude_v"] * np.exp(
+                                           -(times - fit["reference_time_s"]) / fit["tau_s"]))
+            self.assertIn("τ =", line.get_label())
+            self.assertIn("R² =", line.get_label())
+            plt.close(figure)
+
     def test_fft_matches_november_function_in_equivalent_units(self):
         # Extract only the reference function: importing the November module
         # would load its configured input and generate files and figures.

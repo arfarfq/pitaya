@@ -23,6 +23,13 @@ DEFAULTS = {
         "cutoff_khz": 500,
         "sampling_rtol": 0.01,
     },
+    # Positive-maxima exponential decay fit on the unwindowed DC-corrected signal.
+    "decay": {
+        "expected_frequency_hz": 100000,
+        "fit_start_s": None,
+        "fit_end_s": None,
+        "prominence_fraction": 0.05,
+    },
     # Noise thresholds and integration regions for detected FFT peaks.
     "peaks": {
         "min_distance_khz": 0.5,
@@ -53,6 +60,7 @@ DEFAULTS = {
         "frequency_limits_khz": None,
         "clean_mz": True,
         "show_harmonics": True,
+        "show_envelope": False,
         "show": True,
         "save": None,
         "dpi": 150,

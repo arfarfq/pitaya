@@ -33,6 +33,8 @@ The sections are:
   `none`), padding factor, explicit FFT length, and cutoff in kHz.
 - `peaks`: frequency separation, noise thresholds, width measurement height,
   and integration radius multiplier.
+- `decay`: expected oscillation frequency in Hz, fit interval in seconds, and
+  envelope peak prominence threshold.
 - `harmonics`: maximum order and relative frequency tolerance.
 - `calibration`: enable m/z mapping, reference frequency and m/z, reference and
   spectrum harmonic orders, offset, mapped range, and calibration label.
@@ -46,6 +48,29 @@ physical resolution. Amplitude
 normalization remains window-sum corrected, one-sided peak amplitude in volts.
 The time plot shows the selected detrended signal before windowing; raw voltage
 remains available as `processor.y`.
+
+Analysis also fits an exponential upper envelope to positive maxima of the
+DC-corrected, unwindowed signal, following the November decay analysis. Set
+`plot.show_envelope: true` to overlay the fit on the time plot and display the
+decay time constant τ in milliseconds and the log-space R². The fit follows
+the displayed signal's baseline for raw or linearly detrended plots.
+
+The `decay` defaults use an expected frequency of 100000 Hz, a peak separation
+of 70% of that period, and prominence of 5% of the maximum absolute
+DC-corrected voltage. Set `decay.fit_start_s` and `decay.fit_end_s` to inclusive
+capture timestamps to exclude excitation transients or the noise floor;
+`null` uses the full capture range. Multiple frequencies and beating can affect
+the envelope, so inspect the fit quality and interval when interpreting τ.
+
+From Python, call `fit = processor.fit_decay(**config["decay"])` and
+`processor.plot(show_envelope=True)`. The returned dictionary is also stored
+as `processor.decay_fit`, with `tau_s`, `r_squared`, `peak_times_s`,
+`peak_amplitudes_v`, `reference_time_s`, `amplitude_v`, `slope`, and `intercept`.
+The model is `A(t) = amplitude_v * exp(-(t - reference_time_s) / tau_s)`;
+slope and intercept describe its logarithm relative to `reference_time_s`.
+Each call replaces the previous result. Fewer than three usable peaks, a
+nonfinite fit, or a nonnegative slope yields `None` and no overlay; the rest
+of analysis continues. Plotting uses the stored result without fitting again.
 
 Set `plot.show_harmonics: false` to annotate only family fundamentals on the m/z
 plot. Set `plot.clean_mz: false` as well to display the full converted spectrum,

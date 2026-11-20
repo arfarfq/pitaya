@@ -92,3 +92,21 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(any(text.get_text().startswith("H") for text in axes[-1].texts))
         import matplotlib.pyplot as plt
         plt.close(figure)
+
+    def test_decay_config_controls_fit_and_saved_overlay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text("decay:\n  fit_start_s: 0.002\n  fit_end_s: 0.012\n"
+                            "plot:\n  show_envelope: true\n  show: false\n  save: decay.png\n"
+                            "calibration:\n  enabled: false\n")
+            config = load_config(path)
+            self.assertEqual(config["decay"]["expected_frequency_hz"], 100000)
+            time = np.arange(20000) / 1e6
+            voltage = np.exp(-time / 0.006) * np.cos(2 * np.pi * 100000 * time)
+            processor = analyze(DataProcessor(time, voltage), config)
+            self.assertAlmostEqual(processor.decay_fit["tau_s"], 0.006, delta=0.00002)
+            self.assertGreaterEqual(processor.decay_fit["reference_time_s"], 0.002)
+            figure, axes = workflow.display(processor, config)
+            self.assertEqual(len(axes[0].lines), 2)
+            self.assertEqual(len(axes), 2)
+            self.assertTrue((Path(directory) / "decay.png").read_bytes().startswith(b"\x89PNG"))
