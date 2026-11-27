@@ -7,6 +7,12 @@ import numpy as np
 from src import receive_signal
 
 
+CAPTURE_SETTINGS = dict(port=5000, adc_rate_hz=64_000_000, decimation=64,
+                        pre_trigger_s=4e-6, post_trigger_s=4e-6,
+                        socket_timeout_s=5, arm_delay_s=0.02, capture_timeout_s=3,
+                        poll_interval_s=0.01, read_block_samples=8192)
+
+
 class FakeSocket:
     def __init__(self, replies):
         self.replies = io.BytesIO(replies.encode("ascii"))
@@ -30,11 +36,8 @@ class ReceiveSignalTests(unittest.TestCase):
         with (
             patch.object(receive_signal.socket, "create_connection", return_value=sock),
             patch.object(receive_signal.time, "sleep"),
-            patch.object(receive_signal, "ADC_RATE_HZ", 64_000_000),
-            patch.object(receive_signal, "PRE_TRIGGER_S", 4e-6),
-            patch.object(receive_signal, "POST_TRIGGER_S", 4e-6),
         ):
-            return receive_signal.receive_signal("test-board", duration_s=8e-6)
+            return receive_signal.capture_signal("test-board", duration_s=8e-6, **CAPTURE_SETTINGS)
 
     def test_capture_wraps_in_time_order_and_preserves_uploaded_waveform(self):
         # Final write at 29 in a 32-sample ring: oldest sample is at 30.
@@ -96,5 +99,5 @@ class ReceiveSignalTests(unittest.TestCase):
                 receive_signal.socket, "create_connection"
             ) as connect:
                 with self.assertRaises(ValueError):
-                    receive_signal.receive_signal("test-board", duration_s=duration)
+                    receive_signal.capture_signal("test-board", duration_s=duration, **CAPTURE_SETTINGS)
                 connect.assert_not_called()

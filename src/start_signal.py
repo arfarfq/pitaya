@@ -5,7 +5,7 @@ import time
 import numpy as np
 
 from .data_processor import DataProcessor
-from . import start_test
+from . import config as settings
 
 HOST = "rp-xxxxxx.local"  # Replace with your Red Pitaya hostname or IP.
 ADC_RATE_HZ = 125_000_000  # Check your board model.
@@ -21,11 +21,14 @@ def record_transient(host, csv_path=None, *, duration_s=None,
 
     Analysis starts as soon as the complete capture has been downloaded.
     csv_path optionally archives the raw capture in seconds and volts.
-    duration_s defaults to start_test.DURATION_S. The record includes the
+    duration_s defaults to the waveform duration in config.yaml. The record includes the
     requested pre/post-trigger margins; time zero is the IN2 trigger.
     This standalone capture still generates its own excitation pulse on OUT1.
     """
-    duration_s = start_test.DURATION_S if duration_s is None else duration_s
+    if duration_s is None:
+        waveform = settings.DEFAULTS["waveform"]
+        factor = waveform["debug_time_factor"] if waveform["one_second"] else 1
+        duration_s = waveform["duration_s"] * factor
     if not math.isfinite(duration_s) or duration_s <= 0:
         raise ValueError("duration_s must be finite and positive")
     if not all(math.isfinite(value) and value >= 0
@@ -140,7 +143,7 @@ if __name__ == "__main__":
     parser.add_argument("host", help="Red Pitaya hostname or IP address")
     parser.add_argument("--csv", help="Optional path to save the raw capture")
     parser.add_argument("--duration", type=float, default=None,
-                        help="Transient duration in seconds (default: start_test.DURATION_S)")
+                        help="Transient duration in seconds (default: waveform duration in config.yaml)")
     args = parser.parse_args()
     record_transient(args.host, args.csv, duration_s=args.duration).plot()
 

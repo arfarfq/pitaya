@@ -1,102 +1,97 @@
+from copy import deepcopy
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 
 import main
-from src import start_test
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_dummy_runs_both_debug_and_protocol_modes_without_network(self):
-        for factor in (1, 100):
-            with (
-                self.subTest(factor=factor),
-                patch.object(start_test, "FACTOR", factor),
-                patch.object(start_test, "FUNDAMENTAL_HZ", 105_000 / factor),
-                patch.object(start_test, "DURATION_S", 0.010 * factor),
-                patch.object(start_test, "DECAY_TIME_S", 0.003 * factor),
-                patch.object(start_test, "WHITE_NOISE_ENABLED", False),
-                patch("socket.create_connection", side_effect=AssertionError("Network used")),
-            ):
-                times, volts = main.run(dummy=True, duration_s=start_test.DURATION_S)
-                self.assertEqual(volts.size, start_test.WAVEFORM_SAMPLES)
-                self.assertGreater(np.max(np.abs(volts)), 0.1)
-                self.assertLessEqual(np.max(np.abs(volts)), start_test.AMPLITUDE_V)
-                self.assertEqual(times[0], 0)
-                self.assertLess(times[-1], start_test.DURATION_S)
-                np.testing.assert_allclose(np.diff(times),
-                                           start_test.DURATION_S / start_test.WAVEFORM_SAMPLES)
+    def setUp(self):
+        self.config = deepcopy(main.DEFAULTS)
 
-    def test_dummy_preserves_prepared_noise_and_applies_amplitude_once(self):
-        samples = np.full(start_test.WAVEFORM_SAMPLES, 0.25)
-        generated_times = np.arange(samples.size) * 1e-6
+    def run_signal(self, rng=None):
+        if rng is None:
+            rng = np.random.default_rng(self.config["noise"]["seed"])
+        return main.run(self.config, rng)
+
+    def test_dummy_uses_settings_and_skips_all_hardware(self):
+        self.config["mode"]["dummy"] = True
+        self.config["noise"]["enabled"] = False
+        self.config["waveform"].update(fundamental_hz=50_000, phase_rad=np.pi / 2, amplitude_v=0.4)
         with (
-            patch.object(main, "prepare_signal", return_value=(generated_times, samples)) as prepare,
-            patch.object(main, "send_signal") as send,
-            patch.object(main, "receive_signal") as receive,
-            patch("socket.create_connection", side_effect=AssertionError("Network used")),
+            patch.object(main, "upload_signal") as upload,
+            patch.object(main, "capture_signal") as capture,
+            patch("socket.create_connection", side_effect=AssertionError("Unexpected network")),
         ):
-            times, volts = main.run(dummy=True, amplitude_v=0.4)
-        prepare.assert_called_once()
-        self.assertIs(times, generated_times)
-        np.testing.assert_array_equal(volts, 0.25 * 0.4)
-        send.assert_not_called()
-        receive.assert_not_called()
+            times, volts = self.run_signal()
+        self.assertEqual(times.size, 16384)
+        self.assertAlmostEqual(volts[0], 0.4)
+        expected = 0.4 * np.exp(-times / self.config["waveform"]["decay_time_s"]) * (2 / np.pi) * np.arcsin(
+            np.sin(2 * np.pi * 50_000 * times + np.pi / 2))
+        np.testing.assert_allclose(volts, expected, atol=1e-12)
+        upload.assert_not_called()
+        capture.assert_not_called()
 
-    def test_hardware_uploads_without_trigger_before_receiver(self):
-        samples = np.zeros(start_test.WAVEFORM_SAMPLES)
+    def test_hardware_forwards_connection_and_acquisition_settings(self):
+        self.config["mode"]["dummy"] = False
+        self.config["connection"].update(host="test-board", port=5001, socket_timeout_s=7)
+        self.config["acquisition"].update(decimation=128, pre_trigger_s=0.002)
+        samples = np.zeros(16384)
         capture = (np.arange(3), np.zeros(3))
-        calls = MagicMock()
+        order = []
         with (
-            patch.object(main, "prepare_signal", return_value=(None, samples)) as prepare,
-            patch.object(main, "send_signal") as upload,
-            patch.object(main, "receive_signal", return_value=capture) as receive,
+            patch.object(main, "prepare_signal", return_value=(None, samples)),
+            patch.object(main, "upload_signal", side_effect=lambda *a, **kw: order.append("upload")) as upload,
+            patch.object(main, "capture_signal", side_effect=lambda **kw: order.append("capture") or capture) as receive,
         ):
-            calls.attach_mock(upload, "upload")
-            calls.attach_mock(receive, "receive")
-            self.assertIs(main.run(dummy=False, host="test-board", port=5001,
-                                   duration_s=0.5, amplitude_v=0.4), capture)
-        self.assertEqual([call[0] for call in calls.mock_calls], ["upload", "receive"])
-        prepare.assert_called_once_with(0.5)
-        self.assertFalse(upload.call_args.kwargs["trigger"])
-        self.assertIs(upload.call_args.args[0], samples)
-        self.assertEqual(upload.call_args.kwargs["amplitude_v"], 0.4)
-        self.assertEqual(upload.call_args.kwargs["host"], "test-board")
-        self.assertEqual(upload.call_args.kwargs["port"], 5001)
-        receive.assert_called_once_with(host="test-board", port=5001, duration_s=0.5)
+            self.assertIs(self.run_signal(), capture)
+        self.assertEqual(order, ["upload", "capture"])
+        for call in (upload.call_args, receive.call_args):
+            self.assertEqual(call.kwargs["host"], "test-board")
+            self.assertEqual(call.kwargs["port"], 5001)
+            self.assertEqual(call.kwargs["socket_timeout_s"], 7)
+        self.assertEqual(receive.call_args.kwargs["decimation"], 128)
+        self.assertEqual(receive.call_args.kwargs["pre_trigger_s"], 0.002)
 
-    def test_upload_only_does_not_start_playback_or_sleep(self):
-        with (
-            patch.object(start_test.socket, "create_connection") as connect,
-            patch.object(start_test.time, "sleep") as sleep,
-        ):
-            start_test.send_signal(np.zeros(start_test.WAVEFORM_SAMPLES), "test-board", trigger=False)
-        commands = [call.args[0].decode().strip() for call in
-                    connect.return_value.__enter__.return_value.sendall.call_args_list]
-        self.assertIn("SOUR1:BURS:NCYC 1", commands)
-        self.assertNotIn("SOUR1:TRig:INT", commands)
-        self.assertNotIn("OUTPUT1:STATE ON", commands)
-        self.assertEqual(commands[-1], "OUTPUT1:STATE OFF")
-        sleep.assert_not_called()
+    def test_reusing_generator_produces_fresh_reproducible_noise(self):
+        self.config["mode"]["dummy"] = True
+        self.config["noise"]["enabled"] = True
+        rng = np.random.default_rng(42)
+        first = self.run_signal(rng)[1]
+        second = self.run_signal(rng)[1]
+        repeated = self.run_signal(np.random.default_rng(42))[1]
+        np.testing.assert_array_equal(first, repeated)
+        self.assertFalse(np.array_equal(first, second))
 
-    def test_dummy_upload_still_rejects_invalid_waveforms_before_network(self):
-        with patch("socket.create_connection") as connect:
+    def test_protocol_duration_is_checked_before_hardware(self):
+        self.config["waveform"]["duration_s"] = 0.1
+        with patch.object(main, "upload_signal") as upload:
             with self.assertRaises(ValueError):
-                start_test.send_signal(np.full(start_test.WAVEFORM_SAMPLES, 2),
-                                       "test-board", dummy=True)
-        connect.assert_not_called()
+                self.run_signal()
+        upload.assert_not_called()
 
-    def test_main_uses_configured_mode(self):
-        for dummy in (True, False):
-            with (
-                self.subTest(dummy=dummy),
-                patch.object(main, "DUMMY_MODE", dummy),
-                patch.object(main, "run", return_value=(np.arange(3), np.zeros(3))) as run,
-                patch.object(main, "save_signal") as save,
-                patch.object(main, "plot_signal") as plot,
-            ):
-                main.main()
-            self.assertEqual(run.call_args.kwargs["dummy"], dummy)
-            save.assert_called_once()
-            plot.assert_called_once()
+    def test_main_uses_output_and_plot_settings(self):
+        self.config["output"].update(save_data=True, directory="custom-output")
+        self.config["plot"].update(enabled=True, linewidth=1.2)
+        with (
+            patch.object(main, "run", return_value=(np.arange(3), np.zeros(3))),
+            patch.object(main, "save_signal") as save,
+            patch.object(main, "plot_signal") as plot,
+        ):
+            main.main(self.config)
+        save.assert_called_once()
+        self.assertEqual(save.call_args.args[2].parent, main.CONFIG_PATH.parent / "custom-output")
+        self.assertEqual(plot.call_args.kwargs["linewidth"], 1.2)
+
+    def test_debug_duration_frequency_and_decay_scaling(self):
+        self.config["mode"]["dummy"] = True
+        self.config["waveform"]["one_second"] = True
+        self.config["noise"]["enabled"] = False
+        times, volts = self.run_signal()
+        self.assertGreater(times[-1], 0.99)
+        self.assertLess(times[-1], 1)
+        expected = self.config["waveform"]["amplitude_v"] * np.exp(-times / 0.3) * (2 / np.pi) * np.arcsin(
+            np.sin(2 * np.pi * 1050 * times))
+        np.testing.assert_allclose(volts, expected)

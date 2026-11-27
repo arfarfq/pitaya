@@ -1,0 +1,75 @@
+# Units: seconds, volts, kHz, and m/z in Th. null means no limit / no override.
+# Relative file paths are resolved against this YAML file's directory.
+input:
+  source: file # file or acquisition (capture from the board)
+  file: data/k_20ms_avg128_26.5degC.csv
+
+fft:
+  window: blackmanharris # Also hann, hamming, blackman, boxcar, kaiser, etc.
+  window_parameter: null # e.g. 8.6 for a Kaiser window's beta
+  window_symmetric: true # false selects a periodic window
+  detrend: constant # constant = remove mean; linear = remove trend; none
+  padding_factor: 8
+  fft_length: null # Overrides padding_factor; must be >= sample count
+  cutoff_khz: 500 # null keeps the full FFT
+  sampling_rtol: 0.01 # Compatibility option; sampling is assumed uniform
+
+decay:
+  expected_frequency_hz: 100000 # Peak separation uses 70% of this period
+  fit_start_s: null # Inclusive capture timestamp in seconds; null uses full range
+  fit_end_s: null
+  prominence_fraction: 0.05 # Fraction of maximum absolute DC-corrected voltage
+
+peaks:
+  min_distance_khz: 0.50
+  prominence_sigma: 2
+  height_sigma: 5
+  width_rel_height: 0.5 # Half prominence
+  integration_width_factor: 2 # Radius = factor * rounded-up width in bins
+
+harmonics:
+  max_harmonic: 3
+  tolerance: 0.01 # Relative frequency error
+
+calibration:
+  enabled: true
+  # m/z = K / (frequency / harmonic_order - offset_khz)^2
+  # K = ref_mz * (ref_khz / ref_harmonic_order - offset_khz)^2
+  ref_khz: 105.912
+  ref_mz: 38.9637065
+  harmonic_order: 1 # One assumed order for the entire spectrum
+  ref_harmonic_order: 1
+  offset_khz: 0.0
+  mz_range: [1, 200] # Data filter, null keeps all valid mapped values
+  calibration_label: Unconfirmed reference
+
+plot:
+  mz_limits: [1, 200] # Display limits only; null shows the full mapped range
+  frequency_limits_khz: null
+  clean_mz: true # false plots the full converted FFT
+  show_harmonics: true # false labels only family fundamentals
+  show_envelope: true # Overlay the fitted decay envelope, with tau and R²
+  show: true
+  save: null # e.g. output/spectrum.png
+  dpi: 150
+
+# Used when input.source is acquisition. Routing remains OUT1 / IN1 / IN2.
+acquisition:
+  host: rp-xxxxxx.local
+  port: 5000
+  adc_rate_hz: 125000000
+  decimation: 64
+  capture_s: 0.100
+  trigger_level_v: 0.25
+  socket_timeout_s: 5
+  capture_timeout_s: 3
+  arm_delay_s: 0.02
+  poll_interval_s: 0.01
+  block_samples: 8192
+  pulse_samples: 16384
+  pulse_low_samples: 4096
+  pulse_high_samples: 8192
+  pulse_frequency_hz: 125000
+  pulse_amplitude_v: 0.8
+  pulse_offset_v: 0.0
+  csv: null # Optional path to archive the raw capture

@@ -105,7 +105,8 @@ class CaptureTests(unittest.TestCase):
             sock = FakeSocket("16777216\n16777216\nWAIT\n0\n")
             with (
                 self.subTest(duration=duration),
-                patch.object(start_signal.start_test, "DURATION_S", duration),
+                patch.dict(start_signal.settings.DEFAULTS["waveform"],
+                           duration_s=duration, one_second=False),
                 patch.object(start_signal.socket, "create_connection", return_value=sock),
                 patch.object(start_signal.time, "sleep"),
                 patch.object(start_signal.time, "monotonic", side_effect=[0, 10]),
