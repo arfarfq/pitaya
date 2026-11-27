@@ -4,11 +4,11 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
-HOST = "rp-f0f7aa.local"
+HOST = "rp-f0f7aa.local"  # Replace if your board has a different hostname/IP.
 PORT = 5000
 
-ONE_SECOND = True  # Debug mode: stretch the waveform by a factor of 100.
-SEND_SIGNAL = False
+ONE_SECOND = False  # Protocol: 105 kHz, 10 ms. True selects 1 s debug mode.
+SEND_SIGNAL = False  # Standalone preview only; main.py controls hardware playback.
 WHITE_NOISE_ENABLED = True
 
 if ONE_SECOND:
@@ -73,6 +73,7 @@ def add_white_noise(samples, snr_db=WHITE_NOISE_SNR_DB, *, rng=None):
 
     if not np.all(np.isfinite(noisy)) or np.any(np.abs(noisy) > 1):
         raise ValueError("noisy waveform exceeds DAC range; use a higher SNR")
+    
     return noisy
 
 
@@ -131,22 +132,36 @@ def validate_duration(duration_s):
         )
 
 
-def send_signal(samples, host, port=PORT, *, duration_s=DURATION_S,
-                amplitude_v=AMPLITUDE_V):
+def prepare_signal(duration_s=None):
+    """Build one transient and optionally add noise once, without hardware I/O."""
+
+    duration_s = DURATION_S if duration_s is None else duration_s
+    time_s, samples = generate_triangle(duration_s, DECAY_TIME_S, PHASE_RAD)
+
+    if WHITE_NOISE_ENABLED:
+        samples = add_white_noise(samples, WHITE_NOISE_SNR_DB)
+    return time_s, samples
+
+
+def send_signal(samples, host=HOST, port=PORT, duration_s=DURATION_S,
+                amplitude_v=AMPLITUDE_V, trigger=True, dummy=False):
     """Send the supplied normalized waveform once on OUT1.
 
-    amplitude_v is the DAC peak setting in volts, with zero DC offset.
-    Samples are uploaded as supplied; prepare any noise before calling.
-    The complete transient occupies one arbitrary-waveform buffer period.
+    Set trigger=False to upload only; the receiver then arms IN1 before playback.
     """
     validate_duration(duration_s)
+
+    samples = np.asarray(samples, dtype=float)
     if not math.isfinite(amplitude_v) or not 0 < amplitude_v <= 1:
         raise ValueError("amplitude_v must be greater than 0 and at most 1 V")
-    samples = np.asarray(samples, dtype=float)
-    if samples.shape != (WAVEFORM_SAMPLES,) or not np.all(np.isfinite(samples)):
+    if samples.shape != (WAVEFORM_SAMPLES,) or not np.isfinite(samples).all():
         raise ValueError(f"samples must contain {WAVEFORM_SAMPLES} finite values")
     if np.any(np.abs(samples) > 1):
         raise ValueError("samples must be within [-1, 1]")
+
+    if dummy:
+        return
+    
     waveform = ",".join(f"{sample:.9g}" for sample in samples)
 
     with socket.create_connection((host, port), timeout=5) as sock:
@@ -172,38 +187,36 @@ def send_signal(samples, host, port=PORT, *, duration_s=DURATION_S,
             send("SOUR1:BURS:LASTValue 0")
             send("SOUR1:TRig:SOUR INT")
 
-            send("OUTPUT1:STATE ON")
-            send("SOUR1:TRig:INT")
+            if trigger:
+                send("OUTPUT1:STATE ON")
+                send("SOUR1:TRig:INT")
 
-            print(
-                f"Sending waveform on OUT1: T={duration_s * 1000:g} ms, "
-                f"DAC amplitude={amplitude_v:g} V."
-            )
-            # Keep the output enabled until the entire waveform finishes.
-            time.sleep(duration_s + 0.1)
+                print(
+                    f"Sending waveform on OUT1: T={duration_s * 1000:g} ms, "
+                    f"DAC amplitude={amplitude_v:g} V."
+                )
+                # Keep the output enabled until the entire waveform finishes.
+                time.sleep(duration_s + 0.1)
 
         finally:
             send("OUTPUT1:STATE OFF")
 
-    print("Transient complete. OUT1 is off.")
+    if trigger:
+        print("Transient complete. OUT1 is off.")
 
 
 
 if __name__ == "__main__":
     try:
 
-        time_s, samples = generate_triangle(DURATION_S, DECAY_TIME_S, PHASE_RAD)
+        time_s, samples = prepare_signal()
 
         if WHITE_NOISE_ENABLED:
-            samples = add_white_noise(samples, WHITE_NOISE_SNR_DB)
             print(f"White noise enabled: target SNR={WHITE_NOISE_SNR_DB:g} dB; "
                   "signal and noise scaled together for DAC headroom.")
 
         if SEND_SIGNAL:
-            send_signal(
-                samples=samples, host=HOST, port=PORT,
-                duration_s=DURATION_S, amplitude_v=AMPLITUDE_V,
-            )
+            send_signal(samples=samples)
 
         print(f"Triangle period: {PERIOD_S * 1e6:.3f} µs")
 

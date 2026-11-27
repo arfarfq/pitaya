@@ -1,5 +1,41 @@
 # Pitaya / Racetrap signal processing
 
+Generate a triangular transient and acquire it through one entry point:
+
+```sh
+uv run python main.py
+```
+
+Configure `DUMMY_MODE`, `HOST`, `PORT`, `DURATION_S`, and `AMPLITUDE_V` at the top of `main.py`.
+`DUMMY_MODE = True` runs locally; set it to `False` to use the board.
+Dummy mode prepares the waveform and its configured noise locally and returns
+the generated time axis and voltage samples. It skips both upload and
+`receive_signal()` completely: no sockets, simulated acquisition, or capture margins.
+
+Hardware mode requires OUT1 connected to IN1 and the SCPI server running. It
+uploads without playback, arms IN1 on `AWG_PE`, then triggers exactly one burst
+and downloads the samples. Both modes return `(time_s, voltage_v)` from
+`main.run()`. `main.py` saves the returned samples as a timestamped CSV under
+`outputs/`, with columns `time_s` and `voltage_v`. Hardware files start with
+`capture_`; dummy files start with `generated_`. Configure `OUTPUT_DIR` or set
+`SAVE_DATA = False` in `main.py` to disable saving. The waveform is then plotted
+with time in milliseconds and voltage in volts; set `PLOT_DATA = False` to
+disable the plot. The processing helper in `receive_signal.py` remains a placeholder.
+
+Both modes use the waveform/noise settings in `src/start_test.py`, including
+`ONE_SECOND`. The current `ONE_SECOND = False` selects 10 ms at 105 kHz;
+set it to `True` for a 1 s, 1,050 Hz debug transient. `main.DURATION_S` overrides the
+duration within the selected mode's allowed range. `SEND_SIGNAL` controls only
+the standalone `start_test.py` preview; `main.py` uses `DUMMY_MODE`.
+For standalone reception, edit the globals in `src/receive_signal.py` and run
+`uv run python -m src.receive_signal`. Its default is hardware capture of an
+already uploaded waveform. Dummy mode is controlled only by `main.py`.
+
+For the current hardware settings, confirm `HOST` in `src/start_test.py` matches
+your board (currently `rp-f0f7aa.local`), connect OUT1 to IN1, and start the SCPI
+server on the board. `main.DUMMY_MODE = False` uploads and captures one transient.
+Leave `SEND_SIGNAL = False`: it only controls the standalone preview script.
+
 Preview the exponentially decaying 105 kHz triangular transient:
 
 ```sh

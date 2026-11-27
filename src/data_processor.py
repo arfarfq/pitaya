@@ -9,7 +9,7 @@ from scipy.signal import detrend as detrend_signal, find_peaks, peak_widths
 from scipy.signal.windows import get_window
 from scipy.stats import linregress
 
-from .config import DEFAULTS
+from src.config import DEFAULTS
 
 
 class DataProcessor:
